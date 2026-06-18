@@ -41,25 +41,52 @@ class LedgerClient:
         self.max_retries = max_retries
         self.backoff_base = backoff_base
         self._client = None
+        self._lock = asyncio.Lock()
+
+    async def _new_connection(self):
+        from xrpl.asyncio.clients import AsyncWebsocketClient
+        c = AsyncWebsocketClient(self.url)
+        await c.open()
+        return c
+
+    async def _get_client(self):
+        """Return the shared connection, opening one under the lock if needed.
+
+        Connection setup is serialized so concurrent workers share a single
+        live connection rather than each racing to open their own.
+        """
+        async with self._lock:
+            if self._client is None:
+                self._client = await self._new_connection()
+            return self._client
+
+    async def _drop_client(self, failed) -> None:
+        """Reset the shared connection, but only if `failed` is still the
+        active one. Identity guard prevents one worker's transient error from
+        nulling a connection another worker already reconnected and is using."""
+        async with self._lock:
+            if self._client is failed:
+                try:
+                    await self._client.close()
+                except Exception:
+                    pass
+                self._client = None
 
     async def _raw_fetch(self, address: str, marker, limit: int) -> dict:
         from xrpl.models.requests import AccountTx
-        from xrpl.asyncio.clients import AsyncWebsocketClient
         last_exc = None
         for attempt in range(self.max_retries):
+            client = await self._get_client()
             try:
-                if self._client is None:
-                    self._client = AsyncWebsocketClient(self.url)
-                    await self._client.open()
                 req = AccountTx(account=address, limit=limit,
                                 marker=marker, forward=True)
-                resp = await self._client.request(req)
+                resp = await client.request(req)
                 result = resp.result
                 return {"transactions": result.get("transactions", []),
                         "marker": result.get("marker")}
             except Exception as exc:                  # reconnect + backoff
                 last_exc = exc
-                self._client = None
+                await self._drop_client(client)
                 await asyncio.sleep(self.backoff_base * (2 ** attempt))
         raise RuntimeError(f"account_tx failed after {self.max_retries} retries: {last_exc}")
 
@@ -69,11 +96,8 @@ class LedgerClient:
 
     async def verify_full_history(self) -> bool:
         from xrpl.models.requests import ServerInfo
-        if self._client is None:
-            from xrpl.asyncio.clients import AsyncWebsocketClient
-            self._client = AsyncWebsocketClient(self.url)
-            await self._client.open()
-        resp = await self._client.request(ServerInfo())
+        client = await self._get_client()
+        resp = await client.request(ServerInfo())
         complete = resp.result.get("info", {}).get("complete_ledgers", "")
         return _is_full_history(complete)
 

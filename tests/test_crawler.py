@@ -131,6 +131,46 @@ async def test_crawl_invokes_progress_callback(store, fake_ledger_factory):
     assert all(e["leaf"] is False for e in events)
 
 
+class _FlakyLedger:
+    """rSeed pays several children; some children raise on fetch."""
+    def __init__(self, by_address, failing):
+        self.by_address = by_address
+        self.failing = set(failing)
+        self.requested: list[str] = []
+    async def account_tx(self, address, marker=None, limit=200):
+        self.requested.append(address)
+        if address in self.failing:
+            raise RuntimeError(f"transient fetch error for {address}")
+        return self.by_address.get(address, []), None
+
+
+@pytest.mark.asyncio
+async def test_crawl_does_not_deadlock_when_workers_exceed_failing_accounts(store):
+    """A fetch error must not kill the worker and hang queue.join().
+
+    With more failing accounts than workers, the old code (no per-item
+    except) drained every worker and deadlocked on queue.join() forever.
+    """
+    ledger = _FlakyLedger(
+        by_address={
+            "rSeed": [_payment("H1", "rSeed", "rBad1"), _payment("H2", "rSeed", "rBad2"),
+                      _payment("H3", "rSeed", "rBad3"), _payment("H4", "rSeed", "rGood")],
+            "rGood": [],
+        },
+        failing={"rBad1", "rBad2", "rBad3"},
+    )
+    # Must complete; a deadlock surfaces as TimeoutError rather than hanging the suite.
+    await asyncio.wait_for(
+        crawl("rSeed", store, ledger, workers=2, max_hops=4,
+              degree_cap=500, max_accounts=100),
+        timeout=10,
+    )
+    assert store.get_account("rSeed")["crawl_status"] == "done"
+    assert store.get_account("rGood")["crawl_status"] == "done"
+    for bad in ("rBad1", "rBad2", "rBad3"):
+        assert store.get_account(bad)["crawl_status"] == "error"
+
+
 @pytest.mark.asyncio
 async def test_crawl_progress_marks_leaf(store, fake_ledger_factory):
     ledger = fake_ledger_factory({

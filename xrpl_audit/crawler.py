@@ -68,7 +68,19 @@ async def crawl(seed: str, store: Store, source: LedgerSource, *,
                 acct = store.get_account(addr)
                 if acct and acct["crawl_status"] in ("done", "leaf"):
                     continue
-                history = await fetch_account_history(source, addr, store)
+                try:
+                    history = await fetch_account_history(source, addr, store)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    # A fetch/parse/store failure must not kill the worker, or
+                    # the surviving accounts would deadlock queue.join() forever.
+                    store.set_crawl_status(addr, "error")
+                    if on_progress is not None:
+                        on_progress({"address": addr, "hop": hop, "leaf": False,
+                                     "processed": processed, "queued": queue.qsize(),
+                                     "tx_count": 0, "error": str(exc)})
+                    continue
                 counterparties: set[str] = set()
                 for entry in history:
                     parsed = parse_transaction(entry)
