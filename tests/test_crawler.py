@@ -108,3 +108,38 @@ async def test_crawl_treats_high_degree_as_leaf(store, fake_ledger_factory):
     assert store.get_account("rSeed")["is_service_leaf"] == 1
     assert store.get_account("rSeed")["crawl_status"] == "leaf"
     assert ledger.requested == ["rSeed"]   # children never fetched
+
+
+@pytest.mark.asyncio
+async def test_crawl_invokes_progress_callback(store, fake_ledger_factory):
+    # rSeed activated rChild; rChild paid rGrand -> 3 accounts processed
+    ledger = fake_ledger_factory({
+        "rSeed":  [_payment("H1", "rSeed", "rChild", "20000000", created=True)],
+        "rChild": [_payment("H2", "rChild", "rGrand", "5")],
+        "rGrand": [],
+    })
+    events = []
+    await crawl("rSeed", store, ledger, workers=1, max_hops=4,
+                degree_cap=500, max_accounts=100, on_progress=events.append)
+    # one event per processed account, in crawl order
+    assert [e["address"] for e in events] == ["rSeed", "rChild", "rGrand"]
+    # processed counter increments monotonically and each event carries fields
+    assert [e["processed"] for e in events] == [1, 2, 3]
+    assert all({"address", "hop", "leaf", "processed", "queued", "tx_count"} <= e.keys()
+               for e in events)
+    assert events[0]["hop"] == 0 and events[2]["hop"] == 2
+    assert all(e["leaf"] is False for e in events)
+
+
+@pytest.mark.asyncio
+async def test_crawl_progress_marks_leaf(store, fake_ledger_factory):
+    ledger = fake_ledger_factory({
+        "rSeed": [_payment("H1", "rSeed", "rA"), _payment("H2", "rSeed", "rB"),
+                  _payment("H3", "rSeed", "rC")],
+        "rA": [], "rB": [], "rC": [],
+    })
+    events = []
+    await crawl("rSeed", store, ledger, workers=1, max_hops=4,
+                degree_cap=2, max_accounts=100, on_progress=events.append)
+    seed_ev = next(e for e in events if e["address"] == "rSeed")
+    assert seed_ev["leaf"] is True

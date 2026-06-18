@@ -38,9 +38,10 @@ def _counterparties(parsed: ParsedTx, self_addr: str) -> set[str]:
 async def crawl(seed: str, store: Store, source: LedgerSource, *,
                 workers: int = 5, max_hops: int = 4,
                 degree_cap: int = 500, max_accounts: int = 5000,
-                resume: bool = False) -> None:
+                resume: bool = False, on_progress=None) -> None:
     queue: asyncio.Queue = asyncio.Queue()
     enqueued: set[str] = set()
+    processed = 0
     if resume:
         pend = store.pending_accounts()
         if not pend:
@@ -57,6 +58,7 @@ async def crawl(seed: str, store: Store, source: LedgerSource, *,
         queue.put_nowait((seed, 0))
 
     async def worker():
+        nonlocal processed
         while True:
             try:
                 addr, hop = await queue.get()
@@ -85,11 +87,20 @@ async def crawl(seed: str, store: Store, source: LedgerSource, *,
                 store.upsert_account(addr, tx_count=prior + len(history))
                 cp_count = store.get_account(addr)["counterparty_count"]
 
-                if is_service_leaf(cp_count, degree_cap):
+                leaf = is_service_leaf(cp_count, degree_cap)
+                if leaf:
                     store.upsert_account(addr, is_service_leaf=1, crawl_status="leaf")
-                    continue
-                store.set_crawl_status(addr, "done")
+                else:
+                    store.set_crawl_status(addr, "done")
 
+                processed += 1
+                if on_progress is not None:
+                    on_progress({"address": addr, "hop": hop, "leaf": leaf,
+                                 "processed": processed, "queued": queue.qsize(),
+                                 "tx_count": len(history)})
+
+                if leaf:
+                    continue
                 if hop + 1 > max_hops:
                     continue
                 for cp in counterparties:

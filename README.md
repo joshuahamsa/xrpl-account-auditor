@@ -22,6 +22,11 @@ Use `uv run`, which executes inside the project venv:
     uv run audit --db case.db report --format gexf --out case.gexf
     uv run audit --db case.db status
 
+The crawl prints per-account progress to stderr by default
+(`[crawl]  42 done |  137 queued | hop 2 | rXXX (1234 tx)`); pass `--quiet`/`-q`
+to silence it. Progress goes to stderr, so the final JSON summary on stdout
+stays clean for piping.
+
 Prefer a bare `audit` command? Either activate the venv (`source .venv/bin/activate`,
 then `audit ...`) or install it as a global uv tool: `uv tool install --editable .`.
 
