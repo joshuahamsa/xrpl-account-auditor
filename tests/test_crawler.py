@@ -1,5 +1,54 @@
+import asyncio
+import json
 import pytest
 from xrpl_audit.crawler import crawl, is_service_leaf
+from xrpl_audit.storage import Store
+
+
+class _MultiPageLedger:
+    def __init__(self, pages_by_addr):  # addr -> list of (txs, marker) tuples
+        self.pages_by_addr = pages_by_addr
+        self.calls = {}
+    async def account_tx(self, address, marker=None, limit=200):
+        i = self.calls.get(address, 0)
+        self.calls[address] = i + 1
+        pages = self.pages_by_addr.get(address, [([], None)])
+        return pages[min(i, len(pages)-1)]
+
+
+def test_marker_persistence(tmp_path):
+    """Markers are cleared after full pagination; tx_count is cumulative."""
+    store = Store(str(tmp_path / "db.sqlite"))
+    store.init_schema()
+    ledger = _MultiPageLedger({
+        "rSeed": [
+            ([{"hash": "tx1"}], {"m": 1}),
+            ([{"hash": "tx2"}], None),
+        ]
+    })
+    asyncio.run(crawl("rSeed", store, ledger, workers=1, max_hops=0))
+    acct = store.get_account("rSeed")
+    assert acct["last_marker"] is None
+    assert acct["tx_count"] == 2
+
+
+def test_resume_from_pending(tmp_path):
+    """resume=True seeds queue from pending_accounts, skipping 'done' accounts."""
+    store = Store(str(tmp_path / "db.sqlite"))
+    store.init_schema()
+    # rSeed is already done
+    store.upsert_account("rSeed", hop_depth=0, crawl_status="done", tx_count=5)
+    # rPend is pending with a saved marker
+    store.upsert_account("rPend", hop_depth=1, crawl_status="pending", tx_count=3)
+    store.set_marker("rPend", json.dumps({"m": 1}))
+
+    ledger = _MultiPageLedger({
+        "rPend": [([{"hash": "txTail"}], None)],
+    })
+    asyncio.run(crawl("rSeed", store, ledger, workers=1, max_hops=0, resume=True))
+    acct = store.get_account("rPend")
+    assert acct["crawl_status"] == "done"
+    assert acct["last_marker"] is None
 
 
 def _payment(h, src, dst, amount="10", created=False):

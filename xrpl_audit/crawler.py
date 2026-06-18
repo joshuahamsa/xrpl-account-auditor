@@ -10,11 +10,18 @@ def is_service_leaf(counterparty_count: int, degree_cap: int) -> bool:
     return counterparty_count > degree_cap
 
 
-async def fetch_account_history(source: LedgerSource, address: str) -> list[dict]:
-    out, marker = [], None
+async def fetch_account_history(source: LedgerSource, address: str, store=None) -> list[dict]:
+    out = []
+    marker = None
+    if store is not None:
+        acct = store.get_account(address)
+        if acct and acct.get("last_marker"):
+            marker = json.loads(acct["last_marker"])
     while True:
         txs, marker = await source.account_tx(address, marker=marker)
         out.extend(txs)
+        if store is not None:
+            store.set_marker(address, json.dumps(marker) if marker else None)
         if not marker:
             return out
 
@@ -30,11 +37,23 @@ def _counterparties(parsed: ParsedTx, self_addr: str) -> set[str]:
 
 async def crawl(seed: str, store: Store, source: LedgerSource, *,
                 workers: int = 5, max_hops: int = 4,
-                degree_cap: int = 500, max_accounts: int = 5000) -> None:
-    store.upsert_account(seed, hop_depth=0, crawl_status="pending")
+                degree_cap: int = 500, max_accounts: int = 5000,
+                resume: bool = False) -> None:
     queue: asyncio.Queue = asyncio.Queue()
-    queue.put_nowait((seed, 0))
-    enqueued: set[str] = {seed}  # tracks every address placed on the queue
+    enqueued: set[str] = set()
+    if resume:
+        pend = store.pending_accounts()
+        if not pend:
+            pend = [seed]
+        for addr in pend:
+            a = store.get_account(addr)
+            hop = (a.get("hop_depth") if a else 0) or 0
+            enqueued.add(addr)
+            queue.put_nowait((addr, hop))
+    else:
+        store.upsert_account(seed, hop_depth=0, crawl_status="pending")
+        enqueued.add(seed)
+        queue.put_nowait((seed, 0))
 
     async def worker():
         while True:
@@ -46,7 +65,7 @@ async def crawl(seed: str, store: Store, source: LedgerSource, *,
                 acct = store.get_account(addr)
                 if acct and acct["crawl_status"] in ("done", "leaf"):
                     continue
-                history = await fetch_account_history(source, addr)
+                history = await fetch_account_history(source, addr, store)
                 counterparties: set[str] = set()
                 for entry in history:
                     parsed = parse_transaction(entry)
@@ -61,7 +80,8 @@ async def crawl(seed: str, store: Store, source: LedgerSource, *,
 
                 for cp in counterparties:
                     store.record_counterparty(addr, cp)
-                store.upsert_account(addr, tx_count=len(history))
+                prior = (store.get_account(addr) or {}).get("tx_count") or 0
+                store.upsert_account(addr, tx_count=prior + len(history))
                 cp_count = store.get_account(addr)["counterparty_count"]
 
                 if is_service_leaf(cp_count, degree_cap):

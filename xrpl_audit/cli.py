@@ -22,8 +22,9 @@ def cli(ctx, db):
 @click.option("--degree-cap", default=500)
 @click.option("--max-accounts", default=5000)
 @click.option("--node", default="wss://xrplcluster.com")
+@click.option("--resume", is_flag=True, default=False, help="Resume an interrupted crawl from pending accounts/markers.")
 @click.pass_context
-def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node):
+def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node, resume):
     """Crawl the ledger starting from SEED account."""
     store = Store(ctx.obj["db"]); store.init_schema()
     client = LedgerClient(node)
@@ -33,7 +34,7 @@ def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node):
             click.echo("WARNING: node does not advertise full history; results may be partial.", err=True)
         try:
             await run_crawl(seed, store, client, workers=workers, max_hops=max_hops,
-                            degree_cap=degree_cap, max_accounts=max_accounts)
+                            degree_cap=degree_cap, max_accounts=max_accounts, resume=resume)
         finally:
             await client.close()
 
