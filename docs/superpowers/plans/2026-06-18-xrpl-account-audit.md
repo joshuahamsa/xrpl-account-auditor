@@ -6,12 +6,13 @@
 
 **Architecture:** Two phases decoupled by SQLite. Phase 1 is a resumable async breadth-first crawler with a fixed worker pool that auto-detects high-degree "service" accounts and refuses to expand through them. Phase 2 reads the DB, computes four tiers of "same operator" signals, and groups accounts into confidence-tiered clusters. Outputs derive from the DB.
 
-**Tech Stack:** Python 3.11+, `xrpl-py` (async WebSocket + `account_tx`), `networkx` (graph + GEXF/DOT export), `click` (CLI), stdlib `sqlite3` and `asyncio`, `pytest` + `pytest-asyncio` for tests.
+**Tech Stack:** Python 3.10+, `xrpl-py` (async WebSocket + `account_tx`), `networkx` (graph + GEXF/DOT export), `click` (CLI), stdlib `sqlite3` and `asyncio`, `pytest` + `pytest-asyncio` for tests.
 
 ## Global Constraints
 
-- Python **3.11+** (uses `tomllib`-era stdlib, `asyncio.TaskGroup`, modern typing).
+- Python **3.10+** (uses PEP 604 `X | None` unions and PEP 585 builtin generics; **no** `asyncio.TaskGroup`/`tomllib`/`match` — the crawler uses `create_task` + `Queue.join()`).
 - Dependencies limited to: `xrpl-py`, `networkx`, `click` (runtime); `pytest`, `pytest-asyncio` (dev). No others without a spec change.
+- **Run tests with `python -m pytest` from the repo root** (the `xrpl_audit` package is importable from there; no editable install needed). `pip install -e .` is optional and only needed to get the `audit` console-script — it requires network access, so do not gate tests on it.
 - **No live node access in the test suite.** All crawler/client tests run against an injected fake source. A live smoke test is gated behind the `XRPL_AUDIT_LIVE=1` env var.
 - All DB writes are **idempotent**: `transactions` keyed by `tx_hash`, `edges` deduped by `(src, dst, edge_type, tx_hash)`, accounts upserted.
 - Clustering is **rules-based and explainable** — no ML. Every cluster carries an evidence breakdown.
@@ -68,8 +69,8 @@ README.md
 [project]
 name = "xrpl-audit"
 version = "0.1.0"
-requires-python = ">=3.11"
-dependencies = ["xrpl-py>=2.5", "networkx>=3.0", "click>=8.1"]
+requires-python = ">=3.10"
+dependencies = ["xrpl-py>=2.5", "networkx>=3.0", "click>=8.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
@@ -1020,7 +1021,7 @@ git add xrpl_audit/cli.py tests/test_cli.py
 git commit -m "feat: CLI crawl and status commands"
 ```
 
-**STAGE 1 GATE:** `pytest -v` all green; `pip install -e .` then `audit --help` works. You now have a resumable crawl writing to SQLite.
+**STAGE 1 GATE:** `python -m pytest -v` all green; `python -c "from xrpl_audit.cli import cli"` imports cleanly. (The `audit` console-script via `pip install -e .` is online-only and optional.) You now have a resumable crawl writing to SQLite.
 
 ---
 
