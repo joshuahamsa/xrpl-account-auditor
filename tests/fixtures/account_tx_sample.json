@@ -1,0 +1,16 @@
+{
+  "activation": {
+    "tx": {"TransactionType": "Payment", "Account": "rFunder", "Destination": "rNewbie",
+           "Amount": "20000000", "Fee": "12", "hash": "ACT1"},
+    "meta": {"TransactionResult": "tesSUCCESS",
+      "AffectedNodes": [{"CreatedNode": {"LedgerEntryType": "AccountRoot",
+        "NewFields": {"Account": "rNewbie"}}}]},
+    "ledger_index": 100, "close_time_iso": "ignore", "tx_close_time": 700000000
+  },
+  "regular_key": {
+    "tx": {"TransactionType": "SetRegularKey", "Account": "rMaster", "RegularKey": "rRegKey",
+           "Fee": "12", "hash": "RK1"},
+    "meta": {"TransactionResult": "tesSUCCESS", "AffectedNodes": []},
+    "ledger_index": 101, "tx_close_time": 700000100
+  }
+}
