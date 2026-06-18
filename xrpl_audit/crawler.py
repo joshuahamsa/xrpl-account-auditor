@@ -44,6 +44,7 @@ async def crawl(seed: str, store: Store, source: LedgerSource, *,
     if resume:
         pend = store.pending_accounts()
         if not pend:
+            store.upsert_account(seed, hop_depth=0, crawl_status="pending")
             pend = [seed]
         for addr in pend:
             a = store.get_account(addr)

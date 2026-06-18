@@ -49,6 +49,7 @@ def test_resume_from_pending(tmp_path):
     acct = store.get_account("rPend")
     assert acct["crawl_status"] == "done"
     assert acct["last_marker"] is None
+    assert acct["tx_count"] == 4  # prior 3 + 1 tail tx delivered by ledger
 
 
 def _payment(h, src, dst, amount="10", created=False):

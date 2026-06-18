@@ -9,7 +9,7 @@ def _is_full_history(complete_ledgers: str) -> bool:
     """True if the node's complete_ledgers range reaches back to genesis (<=32570)."""
     if not complete_ledgers:
         return False
-    low = complete_ledgers.split("-")[0].strip()
+    low = complete_ledgers.split(",")[0].split("-")[0].strip()
     try:
         return int(low) <= GENESIS_LEDGER
     except ValueError:
