@@ -7,3 +7,4 @@ venv/
 *.gexf
 *.dot
 /vault/
+*.egg-info/

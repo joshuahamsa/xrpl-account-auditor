@@ -2,36 +2,44 @@
 
 Crawl an XRPL account's relationship graph and cluster wallets likely run by the same operator.
 
-## Requirements
-Python 3.10+, and the runtime deps: `xrpl-py`, `networkx`, `click`.
-(Dev/testing also needs `pytest` and `pytest-asyncio`.)
+## Setup (uv)
 
-## Run (no install needed)
-The CLI runs straight from a checkout — no build step:
+The project is managed with [uv](https://docs.astral.sh/uv/) and pinned to Python
+3.11 (see `.python-version`). One command builds the virtualenv, installs all
+deps from the lockfile, and installs the package itself (editable):
 
-    python -m xrpl_audit --db case.db crawl rSEED_ADDRESS --max-hops 4 --degree-cap 500 --workers 6
-    python -m xrpl_audit --db case.db cluster
-    python -m xrpl_audit --db case.db report --format obsidian --vault ./case-vault
-    python -m xrpl_audit --db case.db report --format gexf --out case.gexf
-    python -m xrpl_audit --db case.db status
+    uv sync
 
-## Optional: install the `audit` command
-To get a top-level `audit` shell command, install editably. On older pip (build
-isolation can't reach PyPI), bypass isolation so it uses your system setuptools:
+That's it — no system Python or pip involved.
 
-    pip install --user --no-build-isolation -e .
-    audit --db case.db status   # then `audit ...` works anywhere
+## Run
 
-(A plain `pip install -e .` works too if your pip/setuptools support PEP 660 and
-can fetch build deps; the `--no-build-isolation` form above avoids both needs.)
+Use `uv run`, which executes inside the project venv:
+
+    uv run audit --db case.db crawl rSEED_ADDRESS --max-hops 4 --degree-cap 500 --workers 6
+    uv run audit --db case.db cluster
+    uv run audit --db case.db report --format obsidian --vault ./case-vault
+    uv run audit --db case.db report --format gexf --out case.gexf
+    uv run audit --db case.db status
+
+Prefer a bare `audit` command? Either activate the venv (`source .venv/bin/activate`,
+then `audit ...`) or install it as a global uv tool: `uv tool install --editable .`.
 
 Open `./case-vault` in Obsidian; use the graph view and toggle the `#service-leaf`
 tag group off to focus on the operator network. Confidence tiers: confirmed / likely / possible.
 
 ## Tests
+
 The suite runs fully offline (no live node) against an injected fake ledger:
 
-    python -m pytest -q
+    uv run pytest -q
 
 A gated live smoke test against a real Clio node is not included yet; add one
 behind an `XRPL_AUDIT_LIVE=1` guard if you want end-to-end coverage.
+
+## Without uv
+
+If you'd rather not use uv, the CLI also runs straight from a checkout with no
+install step (needs `xrpl-py`, `networkx`, `click` on your Python 3.10+):
+
+    python -m xrpl_audit --db case.db status
