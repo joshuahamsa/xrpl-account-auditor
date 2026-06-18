@@ -32,6 +32,39 @@ def compute_key_signer_signals(store: Store) -> list[PairSignal]:
 def _private_accounts(store: Store) -> set[str]:
     return {a["address"] for a in store.iter_accounts() if not a["is_service_leaf"]}
 
+def _counterparty_sets(store: Store, private: set[str]) -> dict[str, set[str]]:
+    sets: dict[str, set[str]] = defaultdict(set)
+    rows = store.conn.execute("SELECT address, counterparty FROM counterparties")
+    for r in rows:
+        if r["address"] in private and r["counterparty"] in private:
+            sets[r["address"]].add(r["counterparty"])
+    return sets
+
+def compute_counterparty_nft_signals(store: Store, min_jaccard: float = 0.3,
+                                     min_shared: int = 3) -> list[PairSignal]:
+    out: list[PairSignal] = []
+    private = _private_accounts(store)
+    sets = _counterparty_sets(store, private)
+    accts = sorted(sets)
+    for i in range(len(accts)):
+        for j in range(i + 1, len(accts)):
+            a, b = accts[i], accts[j]
+            sa, sb = sets[a], sets[b]
+            inter = sa & sb
+            union = sa | sb
+            if not union:
+                continue
+            jac = len(inter) / len(union)
+            if jac >= min_jaccard and len(inter) >= min_shared:
+                out.append(PairSignal(a, b, "counterparty_jaccard", min(0.5, jac),
+                                      {"jaccard": round(jac, 3), "shared": len(inter)}))
+    for etype in ("nft_transfer", "nft_sale"):
+        for e in _edges_by_type(store, etype):
+            if e["src"] in private and e["dst"] in private:
+                a, b = _pair(e["src"], e["dst"])
+                out.append(PairSignal(a, b, "nft_flow", 0.4, {"edge": etype, "tx": e["tx_hash"]}))
+    return out
+
 def compute_funding_signals(store: Store) -> list[PairSignal]:
     out: list[PairSignal] = []
     private = _private_accounts(store)

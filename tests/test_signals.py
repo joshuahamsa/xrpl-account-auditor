@@ -34,3 +34,20 @@ def test_bidirectional_self_transfer(store):
     sigs = compute_funding_signals(store)
     st = [s for s in sigs if s.signal_type == "self_transfer"]
     assert len(st) == 1 and {st[0].a, st[0].b} == {"rA", "rB"}
+
+from xrpl_audit.signals import compute_counterparty_nft_signals
+
+def test_counterparty_jaccard(store):
+    _private(store, "rA", "rB")
+    for cp in ["rX", "rY", "rZ"]:
+        store.upsert_account(cp, is_service_leaf=0)
+        store.record_counterparty("rA", cp)
+        store.record_counterparty("rB", cp)
+    sigs = compute_counterparty_nft_signals(store, min_jaccard=0.3, min_shared=3)
+    assert any(s.signal_type == "counterparty_jaccard" and {s.a, s.b} == {"rA", "rB"} for s in sigs)
+
+def test_nft_flow_signal(store):
+    _private(store, "rA", "rB")
+    _seed_edges(store, [("rA", "rB", "nft_transfer")])
+    sigs = compute_counterparty_nft_signals(store)
+    assert any(s.signal_type == "nft_flow" and {s.a, s.b} == {"rA", "rB"} for s in sigs)
