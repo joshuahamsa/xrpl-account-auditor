@@ -90,7 +90,10 @@ def load_clusters(store: Store) -> list[Cluster]:
     for r in rows:
         c = by_id.get(r["cluster_id"])
         if c is None:
-            c = Cluster(id=r["cluster_id"], members=set(), tier=r["tier"], evidence=[])
+            raw = json.loads(r["evidence"]) if r["evidence"] else []
+            ev = [PairSignal(a=e["a"], b=e["b"], signal_type=e["type"],
+                             strength=e["strength"], detail=e["detail"]) for e in raw]
+            c = Cluster(id=r["cluster_id"], members=set(), tier=r["tier"], evidence=ev)
             by_id[r["cluster_id"]] = c
         c.members.add(r["member"])
     return list(by_id.values())
