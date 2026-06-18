@@ -1,5 +1,10 @@
-from xrpl_audit.models import Edge
-from xrpl_audit.signals import compute_key_signer_signals, compute_funding_signals
+from xrpl_audit.models import Edge, ParsedTx
+from xrpl_audit.signals import (
+    compute_key_signer_signals,
+    compute_funding_signals,
+    compute_counterparty_nft_signals,
+    compute_behavioral_signals,
+)
 
 def _seed_edges(store, edges):
     for i, (s, d, t) in enumerate(edges):
@@ -35,8 +40,6 @@ def test_bidirectional_self_transfer(store):
     st = [s for s in sigs if s.signal_type == "self_transfer"]
     assert len(st) == 1 and {st[0].a, st[0].b} == {"rA", "rB"}
 
-from xrpl_audit.signals import compute_counterparty_nft_signals
-
 def test_counterparty_jaccard(store):
     _private(store, "rA", "rB")
     for cp in ["rX", "rY", "rZ"]:
@@ -52,10 +55,54 @@ def test_nft_flow_signal(store):
     sigs = compute_counterparty_nft_signals(store)
     assert any(s.signal_type == "nft_flow" and {s.a, s.b} == {"rA", "rB"} for s in sigs)
 
-from xrpl_audit.signals import compute_behavioral_signals
-
 def test_domain_reuse(store):
     store.upsert_account("rA", domain="6578616d706c65", is_service_leaf=0)
     store.upsert_account("rB", domain="6578616d706c65", is_service_leaf=0)
     sigs = compute_behavioral_signals(store)
     assert any(s.signal_type == "domain_reuse" and {s.a, s.b} == {"rA", "rB"} for s in sigs)
+
+
+def _insert_txs(store, sender, count, close_time, start_idx=0):
+    """Insert `count` transactions for `sender` all at the same close_time."""
+    for i in range(count):
+        tx = ParsedTx(
+            tx_hash=f"TX_{sender}_{start_idx + i}",
+            ledger_index=start_idx + i,
+            close_time=close_time,
+            tx_type="Payment",
+            sender=sender,
+            destination=None,
+            amount=None,
+            currency=None,
+            issuer=None,
+            fee="10",
+            result="tesSUCCESS",
+            edges=[],
+        )
+        store.insert_transaction(tx)
+
+
+def test_active_hours_signal(store):
+    # Two private accounts with identical hour distributions (cosine = 1.0).
+    # close_time=3600 → hour = (3600 + 946684800) // 3600 % 24 = 1; single-bucket spike.
+    # Must be non-zero: the storage filter skips rows where close_time is falsy.
+    _private(store, "rAlice", "rBob")
+    _insert_txs(store, "rAlice", 20, close_time=3600, start_idx=0)
+    _insert_txs(store, "rBob",   20, close_time=3600, start_idx=20)
+
+    sigs = compute_behavioral_signals(store)
+    active = [s for s in sigs if s.signal_type == "active_hours"]
+    assert any({s.a, s.b} == {"rAlice", "rBob"} for s in active), (
+        "expected active_hours PairSignal for rAlice/rBob"
+    )
+
+    # Negative case: third account with < 20 txs must not appear in any active_hours pair
+    _private(store, "rCharlie")
+    _insert_txs(store, "rCharlie", 5, close_time=3600, start_idx=40)
+
+    sigs2 = compute_behavioral_signals(store)
+    charlie_pairs = [
+        s for s in sigs2
+        if s.signal_type == "active_hours" and "rCharlie" in {s.a, s.b}
+    ]
+    assert not charlie_pairs, "rCharlie has < 20 txs and must not appear in active_hours pairs"
