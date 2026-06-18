@@ -1,9 +1,11 @@
 import asyncio
 import json
+from collections import Counter
 import click
 from .storage import Store
 from .crawler import crawl as run_crawl
 from .ledger_client import LedgerClient
+from .cluster import run_clustering
 
 @click.group()
 @click.option("--db", default="audit.db", help="SQLite database path.")
@@ -43,6 +45,18 @@ def status(ctx):
     """Show crawl progress / DB stats."""
     store = Store(ctx.obj["db"]); store.init_schema()
     click.echo(json.dumps(store.counts(), indent=2))
+
+@cli.command()
+@click.option("--weights", type=click.Path(exists=True), default=None,
+              help="JSON file of {signal_type: weight} overrides.")
+@click.pass_context
+def cluster(ctx, weights):
+    """Run phase-2 clustering over the crawled DB."""
+    store = Store(ctx.obj["db"]); store.init_schema()
+    w = json.loads(open(weights).read()) if weights else None
+    clusters = run_clustering(store, w)
+    by_tier = Counter(c.tier for c in clusters)
+    click.echo(json.dumps({"clusters": len(clusters), "by_tier": dict(by_tier)}, indent=2))
 
 if __name__ == "__main__":
     cli()
