@@ -89,7 +89,7 @@ def export_dot(store: Store, clusters: list[Cluster], path: str) -> None:
     lines = ["digraph xrpl {"]
     for n, d in g.nodes(data=True):
         shape = "box" if d["is_service_leaf"] else "ellipse"
-        lines.append(f'  "{n}" [shape={shape}, cluster={d["cluster"]}];')
+        lines.append(f'  "{n}" [shape={shape}, clusterid={d["cluster"]}];')
     for u, v, d in g.edges(data=True):
         lines.append(f'  "{u}" -> "{v}" [label="{d["edge_type"]}"];')
     lines.append("}")
