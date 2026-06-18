@@ -51,3 +51,11 @@ def test_nft_flow_signal(store):
     _seed_edges(store, [("rA", "rB", "nft_transfer")])
     sigs = compute_counterparty_nft_signals(store)
     assert any(s.signal_type == "nft_flow" and {s.a, s.b} == {"rA", "rB"} for s in sigs)
+
+from xrpl_audit.signals import compute_behavioral_signals
+
+def test_domain_reuse(store):
+    store.upsert_account("rA", domain="6578616d706c65", is_service_leaf=0)
+    store.upsert_account("rB", domain="6578616d706c65", is_service_leaf=0)
+    sigs = compute_behavioral_signals(store)
+    assert any(s.signal_type == "domain_reuse" and {s.a, s.b} == {"rA", "rB"} for s in sigs)

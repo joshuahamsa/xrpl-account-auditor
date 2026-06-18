@@ -1,3 +1,4 @@
+import math
 from collections import defaultdict
 from .models import PairSignal
 from .storage import Store
@@ -84,4 +85,46 @@ def compute_funding_signals(store: Store) -> list[PairSignal]:
             if (a, b) not in emitted:
                 emitted.add((a, b))
                 out.append(PairSignal(a, b, "self_transfer", 0.6, {}))
+    return out
+
+RIPPLE_EPOCH_OFFSET = 946684800
+
+def _hour_histograms(store: Store, private: set[str]) -> dict[str, list[int]]:
+    hist: dict[str, list[int]] = defaultdict(lambda: [0] * 24)
+    for r in store.conn.execute("SELECT sender, close_time FROM transactions"):
+        s = r["sender"]
+        if s in private and r["close_time"]:
+            hour = ((r["close_time"] + RIPPLE_EPOCH_OFFSET) // 3600) % 24
+            hist[s][hour] += 1
+    return hist
+
+def _cosine(u: list[int], v: list[int]) -> float:
+    dot = sum(a * b for a, b in zip(u, v))
+    nu = math.sqrt(sum(a * a for a in u))
+    nv = math.sqrt(sum(b * b for b in v))
+    return dot / (nu * nv) if nu and nv else 0.0
+
+def compute_behavioral_signals(store: Store) -> list[PairSignal]:
+    out: list[PairSignal] = []
+    private = _private_accounts(store)
+
+    by_domain: dict[str, list[str]] = defaultdict(list)
+    for a in store.iter_accounts():
+        if a["domain"] and not a["is_service_leaf"]:
+            by_domain[a["domain"]].append(a["address"])
+    for domain, addrs in by_domain.items():
+        addrs = sorted(set(addrs))
+        for i in range(len(addrs)):
+            for j in range(i + 1, len(addrs)):
+                a, b = _pair(addrs[i], addrs[j])
+                out.append(PairSignal(a, b, "domain_reuse", 0.5, {"domain": domain}))
+
+    hist = _hour_histograms(store, private)
+    accts = sorted(k for k, v in hist.items() if sum(v) >= 20)
+    for i in range(len(accts)):
+        for j in range(i + 1, len(accts)):
+            a, b = accts[i], accts[j]
+            cos = _cosine(hist[a], hist[b])
+            if cos >= 0.9:
+                out.append(PairSignal(a, b, "active_hours", 0.2, {"cosine": round(cos, 3)}))
     return out
