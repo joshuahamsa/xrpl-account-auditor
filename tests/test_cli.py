@@ -22,3 +22,14 @@ def test_cluster_command_finds_shared_key_cluster(tmp_path):
     res = CliRunner().invoke(cli, ["--db", str(db), "cluster"])
     assert res.exit_code == 0
     assert "confirmed" in res.output
+
+def test_report_obsidian(tmp_path):
+    db = tmp_path / "audit.db"
+    s = Store(str(db)); s.init_schema()
+    s.upsert_account("rA", is_service_leaf=0, crawl_status="done")
+    s.conn.execute("INSERT INTO clusters(cluster_id, member, tier, evidence) VALUES (1,'rA','confirmed','[]')")
+    s.conn.commit(); s.conn.close()
+    vault = tmp_path / "vault"
+    res = CliRunner().invoke(cli, ["--db", str(db), "report", "--format", "obsidian", "--vault", str(vault)])
+    assert res.exit_code == 0
+    assert (vault / "accounts" / "rA.md").exists()

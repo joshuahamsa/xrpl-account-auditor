@@ -83,3 +83,14 @@ def run_clustering(store: Store, weights=None) -> list[Cluster]:
                                (c.id, m, c.tier, ev))
     store.conn.commit()
     return clusters
+
+def load_clusters(store: Store) -> list[Cluster]:
+    rows = store.conn.execute("SELECT cluster_id, member, tier, evidence FROM clusters").fetchall()
+    by_id: dict[int, Cluster] = {}
+    for r in rows:
+        c = by_id.get(r["cluster_id"])
+        if c is None:
+            c = Cluster(id=r["cluster_id"], members=set(), tier=r["tier"], evidence=[])
+            by_id[r["cluster_id"]] = c
+        c.members.add(r["member"])
+    return list(by_id.values())

@@ -5,7 +5,8 @@ import click
 from .storage import Store
 from .crawler import crawl as run_crawl
 from .ledger_client import LedgerClient
-from .cluster import run_clustering
+from .cluster import run_clustering, load_clusters
+from .report import export_obsidian, export_gexf, export_dot, create_views
 
 @click.group()
 @click.option("--db", default="audit.db", help="SQLite database path.")
@@ -57,6 +58,32 @@ def cluster(ctx, weights):
     clusters = run_clustering(store, w)
     by_tier = Counter(c.tier for c in clusters)
     click.echo(json.dumps({"clusters": len(clusters), "by_tier": dict(by_tier)}, indent=2))
+
+TIER_RANK = {"possible": 1, "likely": 2, "confirmed": 3}
+
+@cli.command()
+@click.option("--format", "fmt", type=click.Choice(["obsidian", "gexf", "dot"]), default="obsidian")
+@click.option("--vault", default="vault", help="Output dir for obsidian format.")
+@click.option("--out", default=None, help="Output file for gexf/dot.")
+@click.option("--min-confidence", type=click.Choice(["possible", "likely", "confirmed"]), default="possible")
+@click.pass_context
+def report(ctx, fmt, vault, out, min_confidence):
+    """Export crawl/cluster results."""
+    store = Store(ctx.obj["db"]); store.init_schema()
+    create_views(store)
+    clusters = [c for c in load_clusters(store)
+                if TIER_RANK[c.tier] >= TIER_RANK[min_confidence]]
+    if fmt == "obsidian":
+        export_obsidian(store, clusters, vault)
+        click.echo(f"Wrote Obsidian vault to {vault}/")
+    elif fmt == "gexf":
+        path = out or "graph.gexf"
+        export_gexf(store, clusters, path)
+        click.echo(f"Wrote {path}")
+    else:
+        path = out or "graph.dot"
+        export_dot(store, clusters, path)
+        click.echo(f"Wrote {path}")
 
 if __name__ == "__main__":
     cli()
