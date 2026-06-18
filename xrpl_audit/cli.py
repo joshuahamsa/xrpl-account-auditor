@@ -28,9 +28,11 @@ def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node):
     async def _run():
         if not await client.verify_full_history():
             click.echo("WARNING: node does not advertise full history; results may be partial.", err=True)
-        await run_crawl(seed, store, client, workers=workers, max_hops=max_hops,
-                        degree_cap=degree_cap, max_accounts=max_accounts)
-        await client.close()
+        try:
+            await run_crawl(seed, store, client, workers=workers, max_hops=max_hops,
+                            degree_cap=degree_cap, max_accounts=max_accounts)
+        finally:
+            await client.close()
 
     asyncio.run(_run())
     click.echo(json.dumps(store.counts(), indent=2))
