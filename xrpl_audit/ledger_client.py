@@ -144,10 +144,18 @@ class LedgerClient:
         page = await self._raw_fetch(address, marker, limit)
         return page["transactions"], page["marker"]
 
-    async def verify_full_history(self) -> bool:
+    async def verify_full_history(self) -> bool | None:
+        """True/False if the node advertises full history; None if the check
+        could not run (connection failed/timed out). A failed preflight must
+        not abort the crawl, so the broken client is dropped and None returned."""
         from xrpl.models.requests import ServerInfo
         client = await self._get_client()
-        resp = await client.request(ServerInfo())
+        try:
+            resp = await asyncio.wait_for(client.request(ServerInfo()),
+                                          self.request_timeout)
+        except Exception:
+            await self._drop_client(client)
+            return None
         complete = resp.result.get("info", {}).get("complete_ledgers", "")
         return _is_full_history(complete)
 

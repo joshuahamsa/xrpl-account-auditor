@@ -126,6 +126,32 @@ async def test_raw_fetch_times_out_on_silent_hang_and_recovers(monkeypatch):
     assert conn.calls == 3   # 2 timed-out hangs + 1 success
 
 
+class _RaisingConn:
+    """A fake connection whose request() always fails (e.g. socket closed)."""
+    async def request(self, req):
+        raise RuntimeError("Websocket is not open")
+
+    async def close(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_verify_full_history_degrades_instead_of_crashing(monkeypatch):
+    """A flaky startup connection must not abort the crawl. verify_full_history
+    returns None ('unknown') and drops the broken client so the next request
+    reconnects, rather than propagating the exception."""
+    client = LedgerClient("wss://example", request_timeout=0.02)
+    conn = _RaisingConn()
+    monkeypatch.setattr(client, "_get_client", lambda: _coro(conn))
+    dropped = []
+    monkeypatch.setattr(client, "_drop_client",
+                        lambda failed: _coro(dropped.append(failed)))
+
+    result = await client.verify_full_history()
+    assert result is None
+    assert dropped == [conn]   # broken connection dropped -> next call reconnects
+
+
 @pytest.mark.asyncio
 async def test_paginate_all_follows_markers():
     raw = _FakeRaw([

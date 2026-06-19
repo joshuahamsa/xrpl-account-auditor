@@ -39,7 +39,10 @@ def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node, resume, 
             err=True)
 
     async def _run():
-        if not await client.verify_full_history():
+        full_history = await client.verify_full_history()
+        if full_history is None:
+            click.echo("WARNING: could not verify node history at startup; proceeding anyway.", err=True)
+        elif not full_history:
             click.echo("WARNING: node does not advertise full history; results may be partial.", err=True)
         try:
             await run_crawl(seed, store, client, workers=workers, max_hops=max_hops,
