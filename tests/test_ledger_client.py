@@ -89,6 +89,43 @@ async def _coro(value):
     return value
 
 
+class _HangThenOk:
+    """A fake ws connection whose request() hangs (never responds) the first
+    `hang_times` calls, then returns a valid page. Models a half-open
+    connection where the node goes silent without sending a close frame."""
+    def __init__(self, hang_times):
+        self.hang_times = hang_times
+        self.calls = 0
+
+    async def request(self, req):
+        self.calls += 1
+        if self.calls <= self.hang_times:
+            await asyncio.sleep(3600)   # hang until wait_for cancels us
+
+        class _Resp:
+            result = {"transactions": [{"hash": "A"}], "marker": None}
+        return _Resp()
+
+    async def close(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_raw_fetch_times_out_on_silent_hang_and_recovers(monkeypatch):
+    """A request that never returns must not hang forever. A per-request
+    timeout turns the silent stall into a retryable error so reconnect+backoff
+    can recover, instead of blocking the worker indefinitely."""
+    client = LedgerClient("wss://example", max_retries=5, backoff_base=0.0,
+                          request_timeout=0.02)
+    conn = _HangThenOk(hang_times=2)
+    monkeypatch.setattr(client, "_get_client", lambda: _coro(conn))
+    monkeypatch.setattr(client, "_drop_client", lambda failed: _coro(None))
+
+    page = await client._raw_fetch("rX", None, 200)
+    assert page["transactions"] == [{"hash": "A"}]
+    assert conn.calls == 3   # 2 timed-out hangs + 1 success
+
+
 @pytest.mark.asyncio
 async def test_paginate_all_follows_markers():
     raw = _FakeRaw([

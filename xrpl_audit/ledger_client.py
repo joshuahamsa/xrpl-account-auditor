@@ -59,10 +59,15 @@ async def paginate_all(
 
 class LedgerClient:
     def __init__(self, url: str, max_retries: int = 5, backoff_base: float = 0.5,
-                 rate_limit_max_retries: int = 50, rate_limit_backoff_cap: float = 60.0):
+                 rate_limit_max_retries: int = 50, rate_limit_backoff_cap: float = 60.0,
+                 request_timeout: float = 30.0):
         self.url = url
         self.max_retries = max_retries
         self.backoff_base = backoff_base
+        # A half-open connection (node goes silent without a close frame) makes
+        # client.request() block forever. Bound every request so a silent stall
+        # becomes a retryable timeout instead of hanging the worker.
+        self.request_timeout = request_timeout
         # Rate-limits get their own, far larger retry budget and a capped
         # exponential backoff so a transient IP ban is ridden out instead of
         # cascading every queued account into `error`.
@@ -110,7 +115,8 @@ class LedgerClient:
             try:
                 req = AccountTx(account=address, limit=limit,
                                 marker=marker, forward=True)
-                resp = await client.request(req)
+                resp = await asyncio.wait_for(client.request(req),
+                                              self.request_timeout)
                 result = resp.result
                 return {"transactions": result.get("transactions", []),
                         "marker": result.get("marker")}
