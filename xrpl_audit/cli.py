@@ -4,7 +4,7 @@ from collections import Counter
 import click
 from .storage import Store
 from .crawler import crawl as run_crawl
-from .ledger_client import LedgerClient
+from .ledger_client import LedgerClient, make_quiet_handler
 from .cluster import run_clustering, load_clusters
 from .report import export_obsidian, export_gexf, export_dot, create_views
 
@@ -39,7 +39,16 @@ def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node, rate, re
             f"hop {ev['hop']} | {ev['address']} ({ev['tx_count']} tx){tag}",
             err=True)
 
+    noise = {"n": 0}
+
     async def _run():
+        # Absorb the fire-and-forget websocket-teardown exceptions xrpl leaks on
+        # every reconnect/close (harmless "Task exception was never retrieved"
+        # spam) while still letting real bugs surface.
+        def _count_noise(_ctx):
+            noise["n"] += 1
+        asyncio.get_running_loop().set_exception_handler(make_quiet_handler(on_noise=_count_noise))
+
         full_history = await client.verify_full_history()
         if full_history is None:
             click.echo("WARNING: could not verify node history at startup; proceeding anyway.", err=True)
@@ -54,6 +63,8 @@ def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node, rate, re
             await client.close()
 
     asyncio.run(_run())
+    if noise["n"] and not quiet:
+        click.echo(f"[crawl] suppressed {noise['n']} expected websocket-teardown exceptions", err=True)
     click.echo(json.dumps(store.counts(), indent=2))
 
 @cli.command()

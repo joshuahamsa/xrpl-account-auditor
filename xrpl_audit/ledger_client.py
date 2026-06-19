@@ -35,6 +35,39 @@ def _is_rate_limit(exc: BaseException) -> bool:
     return any(marker in s for marker in _RATE_LIMIT_MARKERS)
 
 
+def _is_background_noise(exc: BaseException | None) -> bool:
+    """True if `exc` is an expected casualty of tearing down a websocket
+    connection in a third-party fire-and-forget task, not a crawl failure.
+
+    xrpl's AsyncWebsocketClient runs its read loop in a background task it
+    cancels-without-awaiting on close; under websockets 15.x a cancel mid-recv
+    raises AssertionError("cannot reset()..."), and a server-initiated close
+    raises ConnectionClosed*. These reach the event loop as 'Task exception was
+    never retrieved' but are harmless — our own fetch code handles its errors."""
+    if exc is None:
+        return False
+    if isinstance(exc, asyncio.CancelledError):
+        return True
+    if isinstance(exc, AssertionError) and "reset()" in str(exc):
+        return True
+    if type(exc).__name__.startswith("ConnectionClosed"):
+        return True
+    return _is_rate_limit(exc)
+
+
+def make_quiet_handler(on_noise=None):
+    """Build an asyncio loop exception handler that swallows expected websocket
+    teardown noise (see _is_background_noise) and delegates everything else to
+    the loop's default handler so genuine bugs still surface."""
+    def handler(loop, context):
+        if _is_background_noise(context.get("exception")):
+            if on_noise is not None:
+                on_noise(context)
+            return
+        loop.default_exception_handler(context)
+    return handler
+
+
 def _is_full_history(complete_ledgers: str) -> bool:
     """True if the node's complete_ledgers range reaches back to genesis (<=32570)."""
     if not complete_ledgers:

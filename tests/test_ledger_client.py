@@ -1,5 +1,38 @@
+import asyncio
 import pytest
-from xrpl_audit.ledger_client import paginate_all, LedgerClient, _is_rate_limit
+from xrpl_audit.ledger_client import (paginate_all, LedgerClient, _is_rate_limit,
+                                      make_quiet_handler)
+
+
+def test_quiet_handler_swallows_background_noise_but_surfaces_real_bugs():
+    """The loop exception handler must absorb the fire-and-forget websocket
+    teardown casualties (connection-closed, cancellation, the websockets
+    reset() assertion) so they stop spamming 'Task exception was never
+    retrieved' — while still delegating genuine bugs to the default handler."""
+    delegated, swallowed = [], []
+
+    class _FakeLoop:
+        def default_exception_handler(self, ctx):
+            delegated.append(ctx)
+
+    handler = make_quiet_handler(on_noise=lambda ctx: swallowed.append(ctx))
+    loop = _FakeLoop()
+
+    ConnClosed = type("ConnectionClosedError", (Exception,), {})
+    noise = [
+        ConnClosed("received 1008 (policy violation) IP limit reached"),
+        asyncio.CancelledError(),
+        AssertionError("cannot reset() while queue isn't empty"),
+        RuntimeError("Websocket is not open"),
+    ]
+    for exc in noise:
+        handler(loop, {"exception": exc})
+    assert len(swallowed) == len(noise)
+    assert delegated == []
+
+    # A genuine, unexpected error must still reach the default handler.
+    handler(loop, {"exception": ValueError("genuine bug")})
+    assert len(delegated) == 1
 
 
 class _Conn:
