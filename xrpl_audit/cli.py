@@ -55,16 +55,23 @@ def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node, rate, re
         elif not full_history:
             click.echo("WARNING: node does not advertise full history; results may be partial.", err=True)
         try:
-            await run_crawl(seed, store, client, workers=workers, max_hops=max_hops,
+            return await run_crawl(seed, store, client, workers=workers, max_hops=max_hops,
                             degree_cap=degree_cap, max_accounts=max_accounts, resume=resume,
                             retry_errors=retry_errors,
                             on_progress=None if quiet else _progress)
         finally:
             await client.close()
 
-    asyncio.run(_run())
+    result = asyncio.run(_run())
     if noise["n"] and not quiet:
         click.echo(f"[crawl] suppressed {noise['n']} expected websocket-teardown exceptions", err=True)
+    if result and result.get("capped"):
+        uncrawled = store.counts().get("status_pending", 0)
+        click.echo(
+            f"WARNING: stopped at the --max-accounts cap ({result['max_accounts']}); "
+            f"{uncrawled} discovered accounts were left uncrawled. The graph is NOT "
+            f"fully expanded to --max-hops. Raise --max-accounts and re-run with "
+            f"--resume to go deeper.", err=True)
     click.echo(json.dumps(store.counts(), indent=2))
 
 @cli.command()

@@ -39,10 +39,11 @@ async def crawl(seed: str, store: Store, source: LedgerSource, *,
                 workers: int = 5, max_hops: int = 4,
                 degree_cap: int = 500, max_accounts: int = 5000,
                 resume: bool = False, retry_errors: bool = False,
-                on_progress=None) -> None:
+                on_progress=None) -> dict:
     queue: asyncio.Queue = asyncio.Queue()
     enqueued: set[str] = set()
     processed = 0
+    capped = False
     if resume or retry_errors:
         pend = store.pending_accounts(include_errors=retry_errors)
         if not pend:
@@ -63,7 +64,7 @@ async def crawl(seed: str, store: Store, source: LedgerSource, *,
         queue.put_nowait((seed, 0))
 
     async def worker():
-        nonlocal processed
+        nonlocal processed, capped
         while True:
             try:
                 addr, hop = await queue.get()
@@ -127,6 +128,7 @@ async def crawl(seed: str, store: Store, source: LedgerSource, *,
                     if acct_cp and acct_cp["crawl_status"] in ("done", "leaf"):
                         continue
                     if len(enqueued) >= max_accounts:
+                        capped = True
                         break
                     store.upsert_account(cp, hop_depth=hop + 1, crawl_status="pending")
                     enqueued.add(cp)
@@ -139,3 +141,4 @@ async def crawl(seed: str, store: Store, source: LedgerSource, *,
     for t in tasks:
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
+    return {"processed": processed, "capped": capped, "max_accounts": max_accounts}

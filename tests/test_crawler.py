@@ -197,6 +197,34 @@ async def test_crawl_does_not_deadlock_when_workers_exceed_failing_accounts(stor
 
 
 @pytest.mark.asyncio
+async def test_crawl_reports_max_accounts_cap_hit(store, fake_ledger_factory):
+    """When expansion stops because the max_accounts cap is reached (not because
+    the graph was exhausted), crawl() must report capped=True so the caller can
+    warn instead of the crawl looking falsely complete."""
+    ledger = fake_ledger_factory({
+        "rSeed": [_payment("H1", "rSeed", "rA"), _payment("H2", "rSeed", "rB"),
+                  _payment("H3", "rSeed", "rC")],
+        "rA": [], "rB": [], "rC": [],
+    })
+    # seed + 1 child fills the cap of 2; rB/rC discovered but never enqueued.
+    result = await crawl("rSeed", store, ledger, workers=1, max_hops=4,
+                         degree_cap=500, max_accounts=2)
+    assert result["capped"] is True
+
+
+@pytest.mark.asyncio
+async def test_crawl_not_capped_when_graph_exhausted(store, fake_ledger_factory):
+    """A crawl that expands the whole graph within the cap reports capped=False."""
+    ledger = fake_ledger_factory({
+        "rSeed": [_payment("H1", "rSeed", "rA"), _payment("H2", "rSeed", "rB")],
+        "rA": [], "rB": [],
+    })
+    result = await crawl("rSeed", store, ledger, workers=1, max_hops=4,
+                         degree_cap=500, max_accounts=100)
+    assert result["capped"] is False
+
+
+@pytest.mark.asyncio
 async def test_crawl_progress_marks_leaf(store, fake_ledger_factory):
     ledger = fake_ledger_factory({
         "rSeed": [_payment("H1", "rSeed", "rA"), _payment("H2", "rSeed", "rB"),
