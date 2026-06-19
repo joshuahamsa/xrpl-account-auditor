@@ -23,9 +23,10 @@ def cli(ctx, db):
 @click.option("--max-accounts", default=5000)
 @click.option("--node", default="wss://xrplcluster.com")
 @click.option("--resume", is_flag=True, default=False, help="Resume an interrupted crawl from pending accounts/markers.")
+@click.option("--retry-errors", is_flag=True, default=False, help="Also re-queue accounts left in 'error' (e.g. from a rate-limit) and crawl them again.")
 @click.option("--quiet", "-q", is_flag=True, default=False, help="Suppress the per-account progress output.")
 @click.pass_context
-def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node, resume, quiet):
+def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node, resume, retry_errors, quiet):
     """Crawl the ledger starting from SEED account."""
     store = Store(ctx.obj["db"]); store.init_schema()
     client = LedgerClient(node)
@@ -43,6 +44,7 @@ def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node, resume, 
         try:
             await run_crawl(seed, store, client, workers=workers, max_hops=max_hops,
                             degree_cap=degree_cap, max_accounts=max_accounts, resume=resume,
+                            retry_errors=retry_errors,
                             on_progress=None if quiet else _progress)
         finally:
             await client.close()

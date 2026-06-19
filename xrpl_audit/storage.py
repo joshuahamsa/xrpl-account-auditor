@@ -115,9 +115,12 @@ class Store:
     def set_marker(self, address: str, marker: str | None) -> None:
         self.upsert_account(address, last_marker=marker)
 
-    def pending_accounts(self) -> list[str]:
+    def pending_accounts(self, include_errors: bool = False) -> list[str]:
+        statuses = ("pending", "error") if include_errors else ("pending",)
+        placeholders = ",".join("?" * len(statuses))
         rows = self.conn.execute(
-            "SELECT address FROM accounts WHERE crawl_status='pending' ORDER BY hop_depth").fetchall()
+            f"SELECT address FROM accounts WHERE crawl_status IN ({placeholders}) "
+            "ORDER BY hop_depth", statuses).fetchall()
         return [r["address"] for r in rows]
 
     def iter_accounts(self) -> Iterator[dict]:

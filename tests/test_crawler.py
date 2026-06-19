@@ -52,6 +52,31 @@ def test_resume_from_pending(tmp_path):
     assert acct["tx_count"] == 4  # prior 3 + 1 tail tx delivered by ledger
 
 
+def test_resume_skips_error_accounts_by_default(tmp_path):
+    """Plain resume only re-queues 'pending'; 'error' accounts are left alone."""
+    store = Store(str(tmp_path / "db.sqlite"))
+    store.init_schema()
+    store.upsert_account("rSeed", hop_depth=0, crawl_status="done", tx_count=5)
+    store.upsert_account("rErr", hop_depth=1, crawl_status="error")
+    ledger = _MultiPageLedger({"rErr": [([{"hash": "txX"}], None)]})
+    asyncio.run(crawl("rSeed", store, ledger, workers=1, max_hops=0, resume=True))
+    assert store.get_account("rErr")["crawl_status"] == "error"
+    assert "rErr" not in ledger.calls
+
+
+def test_resume_retries_error_accounts_when_requested(tmp_path):
+    """retry_errors=True re-queues 'error' accounts and re-crawls them to done."""
+    store = Store(str(tmp_path / "db.sqlite"))
+    store.init_schema()
+    store.upsert_account("rSeed", hop_depth=0, crawl_status="done", tx_count=5)
+    store.upsert_account("rErr", hop_depth=1, crawl_status="error")
+    ledger = _MultiPageLedger({"rErr": [([{"hash": "txX"}], None)]})
+    asyncio.run(crawl("rSeed", store, ledger, workers=1, max_hops=0,
+                      resume=True, retry_errors=True))
+    assert store.get_account("rErr")["crawl_status"] == "done"
+    assert ledger.calls.get("rErr") == 1
+
+
 def _payment(h, src, dst, amount="10", created=False):
     meta = {"TransactionResult": "tesSUCCESS", "AffectedNodes": []}
     if created:

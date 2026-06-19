@@ -38,18 +38,23 @@ def _counterparties(parsed: ParsedTx, self_addr: str) -> set[str]:
 async def crawl(seed: str, store: Store, source: LedgerSource, *,
                 workers: int = 5, max_hops: int = 4,
                 degree_cap: int = 500, max_accounts: int = 5000,
-                resume: bool = False, on_progress=None) -> None:
+                resume: bool = False, retry_errors: bool = False,
+                on_progress=None) -> None:
     queue: asyncio.Queue = asyncio.Queue()
     enqueued: set[str] = set()
     processed = 0
-    if resume:
-        pend = store.pending_accounts()
+    if resume or retry_errors:
+        pend = store.pending_accounts(include_errors=retry_errors)
         if not pend:
             store.upsert_account(seed, hop_depth=0, crawl_status="pending")
             pend = [seed]
         for addr in pend:
             a = store.get_account(addr)
             hop = (a.get("hop_depth") if a else 0) or 0
+            # Reset previously-errored accounts so progress/status counts reflect
+            # that they are being retried, not still failed.
+            if a and a.get("crawl_status") == "error":
+                store.set_crawl_status(addr, "pending")
             enqueued.add(addr)
             queue.put_nowait((addr, hop))
     else:
