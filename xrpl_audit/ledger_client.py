@@ -5,11 +5,13 @@ from typing import Protocol
 
 GENESIS_LEDGER = 32570
 
-# Substrings (lowercased) that mark a node throttling us rather than a genuine
-# fetch failure. The public xrplcluster/ripple nodes close with a 1008 policy
-# violation ("Connection (public) IP limit reached") when too many requests or
-# connections come from one IP; that is transient and must be ridden out, not
-# turned into a permanent per-account error.
+# Substrings (lowercased) marking a transient transport/throttle condition that
+# must be ridden out patiently rather than turned into a permanent per-account
+# error. The public xrplcluster/ripple nodes close with a 1008 policy violation
+# ("Connection (public) IP limit reached") under load; that 1008 is often
+# swallowed by the client's background handler, so the *next* request instead
+# fails with a closed-socket symptom ("Websocket is not open", 1006). All of
+# these are connection-level and should back off, not give up.
 _RATE_LIMIT_MARKERS = (
     "1008",
     "policy violation",
@@ -18,11 +20,17 @@ _RATE_LIMIT_MARKERS = (
     "too many",
     "rate limit",
     "try again",
+    "websocket is not open",
+    "connection closed",
+    "connection is closed",
+    "1006",
+    "1001",
 )
 
 
 def _is_rate_limit(exc: BaseException) -> bool:
-    """True if `exc` looks like the node throttling/refusing us (vs. a real error)."""
+    """True if `exc` is a transient throttle/transport failure worth a patient
+    retry (vs. a genuine, give-up-fast error)."""
     s = str(exc).lower()
     return any(marker in s for marker in _RATE_LIMIT_MARKERS)
 

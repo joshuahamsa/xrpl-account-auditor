@@ -37,6 +37,11 @@ def test_is_rate_limit_detects_node_connection_limit():
         "received 1008 (policy violation) Connection (public) IP limit reached"))
     assert _is_rate_limit(Exception("Connection (public) IP limit reached"))
     assert _is_rate_limit(Exception("please slow down"))
+    # The throttle also surfaces indirectly: the node's background handler
+    # swallows the 1008 close, and the next request fails with a closed-socket
+    # symptom. Those must also be treated as transient/patient, not given up on.
+    assert _is_rate_limit(Exception("Websocket is not open"))
+    assert _is_rate_limit(Exception("received 1006 connection closed abnormally"))
     # A genuine non-throttle error is NOT a rate-limit.
     assert not _is_rate_limit(RuntimeError("malformed account_tx response"))
 
