@@ -1,10 +1,15 @@
 __pycache__/
 *.pyc
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 .venv/
 venv/
 *.gexf
 *.dot
+# Obsidian export dirs (default `vault/` and any `*-vault/` like `case-vault/`)
 /vault/
+*-vault/
+case-vault/
 *.egg-info/
