@@ -21,15 +21,16 @@ def cli(ctx, db):
 @click.option("--max-hops", default=4)
 @click.option("--degree-cap", default=500)
 @click.option("--max-accounts", default=5000)
-@click.option("--node", default="wss://xrplcluster.com")
+@click.option("--node", default="wss://s2.ripple.com", help="Full-history XRPL websocket node.")
+@click.option("--rate", default=10.0, help="Max requests/sec across all workers (global throttle) to stay under the node's per-IP cap. 0 disables.")
 @click.option("--resume", is_flag=True, default=False, help="Resume an interrupted crawl from pending accounts/markers.")
 @click.option("--retry-errors", is_flag=True, default=False, help="Also re-queue accounts left in 'error' (e.g. from a rate-limit) and crawl them again.")
 @click.option("--quiet", "-q", is_flag=True, default=False, help="Suppress the per-account progress output.")
 @click.pass_context
-def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node, resume, retry_errors, quiet):
+def crawl(ctx, seed, workers, max_hops, degree_cap, max_accounts, node, rate, resume, retry_errors, quiet):
     """Crawl the ledger starting from SEED account."""
     store = Store(ctx.obj["db"]); store.init_schema()
-    client = LedgerClient(node)
+    client = LedgerClient(node, min_request_interval=(1.0 / rate if rate > 0 else 0.0))
 
     def _progress(ev):
         tag = " [leaf]" if ev["leaf"] else ""

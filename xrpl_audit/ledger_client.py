@@ -68,10 +68,16 @@ async def paginate_all(
 class LedgerClient:
     def __init__(self, url: str, max_retries: int = 5, backoff_base: float = 0.5,
                  rate_limit_max_retries: int = 50, rate_limit_backoff_cap: float = 60.0,
-                 request_timeout: float = 30.0):
+                 request_timeout: float = 30.0, min_request_interval: float = 0.0):
         self.url = url
         self.max_retries = max_retries
         self.backoff_base = backoff_base
+        # Global request spacing: stay under the public node's per-IP cap so we
+        # never trip a ban in the first place (backoff only recovers *after* a
+        # ban). Shared across all workers via _rate_lock.
+        self.min_request_interval = min_request_interval
+        self._rate_lock = asyncio.Lock()
+        self._next_allowed = 0.0
         # A half-open connection (node goes silent without a close frame) makes
         # client.request() block forever. Bound every request so a silent stall
         # becomes a retryable timeout instead of hanging the worker.
@@ -113,12 +119,27 @@ class LedgerClient:
                     pass
                 self._client = None
 
+    async def _throttle(self) -> None:
+        """Block until the next request is allowed, enforcing a global minimum
+        interval between requests across all workers."""
+        if self.min_request_interval <= 0:
+            return
+        async with self._rate_lock:
+            loop = asyncio.get_event_loop()
+            now = loop.time()
+            wait = self._next_allowed - now
+            if wait > 0:
+                await asyncio.sleep(wait)
+                now = loop.time()
+            self._next_allowed = max(now, self._next_allowed) + self.min_request_interval
+
     async def _raw_fetch(self, address: str, marker, limit: int) -> dict:
         from xrpl.models.requests import AccountTx
         last_exc = None
         err_attempts = 0   # genuine errors (small budget)
         rl_attempts = 0    # rate-limit / throttle (large budget)
         while True:
+            await self._throttle()
             client = await self._get_client()
             try:
                 req = AccountTx(account=address, limit=limit,
@@ -157,6 +178,7 @@ class LedgerClient:
         could not run (connection failed/timed out). A failed preflight must
         not abort the crawl, so the broken client is dropped and None returned."""
         from xrpl.models.requests import ServerInfo
+        await self._throttle()
         client = await self._get_client()
         try:
             resp = await asyncio.wait_for(client.request(ServerInfo()),

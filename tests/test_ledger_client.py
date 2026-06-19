@@ -131,6 +131,32 @@ async def test_raw_fetch_times_out_on_silent_hang_and_recovers(monkeypatch):
     assert conn.calls == 3   # 2 timed-out hangs + 1 success
 
 
+@pytest.mark.asyncio
+async def test_throttle_spaces_consecutive_requests(monkeypatch):
+    """With a min interval set, back-to-back requests are spaced: the second
+    call sleeps ~interval so the global request rate stays under the node's cap."""
+    client = LedgerClient("wss://example", min_request_interval=0.05)
+    slept = []
+    async def fake_sleep(d): slept.append(d)
+    monkeypatch.setattr("xrpl_audit.ledger_client.asyncio.sleep", fake_sleep)
+
+    await client._throttle()          # first call: no wait needed
+    await client._throttle()          # immediately after: must wait ~interval
+    assert len(slept) == 1
+    assert 0 < slept[0] <= 0.05
+
+
+@pytest.mark.asyncio
+async def test_throttle_noop_when_disabled(monkeypatch):
+    client = LedgerClient("wss://example", min_request_interval=0.0)
+    slept = []
+    async def fake_sleep(d): slept.append(d)
+    monkeypatch.setattr("xrpl_audit.ledger_client.asyncio.sleep", fake_sleep)
+    await client._throttle()
+    await client._throttle()
+    assert slept == []
+
+
 class _RaisingConn:
     """A fake connection whose request() always fails (e.g. socket closed)."""
     async def request(self, req):
