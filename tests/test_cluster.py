@@ -24,6 +24,27 @@ def test_build_clusters_unions_strong_pairs():
     big = next(c for c in clusters if c.members == {"rA", "rB", "rC"})
     assert big.tier == "confirmed"
 
+def test_active_hours_does_not_explode_without_candidates():
+    # 50 accounts all active in the same hour, each with >=20 txs, but NO linking
+    # signal between any of them. The old all-pairs code materialised C(50,2)=1225
+    # active_hours PairSignals here (the mechanism behind the 42 GB OOM at 17k
+    # accounts). The candidate-gated path must write zero.
+    from xrpl_audit.models import ParsedTx
+    store = Store(":memory:")
+    store.init_schema()
+    for i in range(50):
+        addr = f"rZ{i:02d}"
+        store.upsert_account(addr, is_service_leaf=0, crawl_status="done")
+        for j in range(20):
+            store.insert_transaction(ParsedTx(
+                tx_hash=f"TX_{addr}_{j}", ledger_index=i * 20 + j, close_time=3600,
+                tx_type="Payment", sender=addr, destination=None, amount=None,
+                currency=None, issuer=None, fee="10", result="tesSUCCESS", edges=[]))
+    run_clustering(store)
+    n_active = store.conn.execute(
+        "SELECT COUNT(*) FROM signals WHERE signal_type='active_hours'").fetchone()[0]
+    assert n_active == 0, f"active_hours exploded: {n_active} signals (expected 0)"
+
 def test_load_clusters_restores_evidence():
     store = Store(":memory:")
     store.init_schema()

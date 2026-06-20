@@ -7,7 +7,10 @@ def _pair(x: str, y: str) -> tuple[str, str]:
     return (x, y) if x <= y else (y, x)
 
 def _edges_by_type(store: Store, edge_type: str):
-    return [e for e in store.iter_edges() if e["edge_type"] == edge_type]
+    # Query by indexed column (idx_edges_type) instead of scanning every edge
+    # into Python once per type.
+    return [dict(r) for r in store.conn.execute(
+        "SELECT * FROM edges WHERE edge_type=?", (edge_type,))]
 
 def compute_key_signer_signals(store: Store) -> list[PairSignal]:
     out: list[PairSignal] = []
@@ -42,23 +45,42 @@ def _counterparty_sets(store: Store, private: set[str]) -> dict[str, set[str]]:
     return sets
 
 def compute_counterparty_nft_signals(store: Store, min_jaccard: float = 0.3,
-                                     min_shared: int = 3) -> list[PairSignal]:
+                                     min_shared: int = 3,
+                                     max_holders: int = 50) -> list[PairSignal]:
     out: list[PairSignal] = []
     private = _private_accounts(store)
     sets = _counterparty_sets(store, private)
-    accts = sorted(sets)
-    for i in range(len(accts)):
-        for j in range(i + 1, len(accts)):
-            a, b = accts[i], accts[j]
-            sa, sb = sets[a], sets[b]
-            inter = sa & sb
-            union = sa | sb
-            if not union:
-                continue
-            jac = len(inter) / len(union)
-            if jac >= min_jaccard and len(inter) >= min_shared:
-                out.append(PairSignal(a, b, "counterparty_jaccard", min(0.5, jac),
-                                      {"jaccard": round(jac, 3), "shared": len(inter)}))
+
+    # Inverted index: counterparty -> accounts that touched it. Two accounts can
+    # only have non-zero Jaccard if they co-occur under some counterparty, so we
+    # generate candidate pairs from this index instead of enumerating all n^2
+    # account pairs. Counterparties held by more than `max_holders` accounts are
+    # hubs (everyone touches them) — non-discriminating and an O(holders^2)
+    # candidate bomb — so we skip them, mirroring the crawler's --degree-cap.
+    holders: dict[str, list[str]] = defaultdict(list)
+    for acct, cps in sets.items():
+        for cp in cps:
+            holders[cp].append(acct)
+
+    candidates: set[tuple[str, str]] = set()
+    for cp, accts in holders.items():
+        if len(accts) > max_holders:
+            continue
+        accts = sorted(set(accts))
+        for i in range(len(accts)):
+            for j in range(i + 1, len(accts)):
+                candidates.add((accts[i], accts[j]))
+
+    for a, b in candidates:
+        sa, sb = sets[a], sets[b]
+        inter = sa & sb
+        if len(inter) < min_shared:
+            continue
+        union = sa | sb
+        jac = len(inter) / len(union)
+        if jac >= min_jaccard:
+            out.append(PairSignal(a, b, "counterparty_jaccard", min(0.5, jac),
+                                  {"jaccard": round(jac, 3), "shared": len(inter)}))
     for etype in ("nft_transfer", "nft_sale"):
         for e in _edges_by_type(store, etype):
             if e["src"] in private and e["dst"] in private:
@@ -89,11 +111,11 @@ def compute_funding_signals(store: Store) -> list[PairSignal]:
 
 RIPPLE_EPOCH_OFFSET = 946684800
 
-def _hour_histograms(store: Store, private: set[str]) -> dict[str, list[int]]:
+def _hour_histograms(store: Store, accounts: set[str]) -> dict[str, list[int]]:
     hist: dict[str, list[int]] = defaultdict(lambda: [0] * 24)
     for r in store.conn.execute("SELECT sender, close_time FROM transactions"):
         s = r["sender"]
-        if s in private and r["close_time"]:
+        if s in accounts and r["close_time"]:
             hour = ((r["close_time"] + RIPPLE_EPOCH_OFFSET) // 3600) % 24
             hist[s][hour] += 1
     return hist
@@ -104,9 +126,8 @@ def _cosine(u: list[int], v: list[int]) -> float:
     nv = math.sqrt(sum(b * b for b in v))
     return dot / (nu * nv) if nu and nv else 0.0
 
-def compute_behavioral_signals(store: Store) -> list[PairSignal]:
+def compute_behavioral_signals(store: Store, max_domain_holders: int = 50) -> list[PairSignal]:
     out: list[PairSignal] = []
-    private = _private_accounts(store)
 
     by_domain: dict[str, list[str]] = defaultdict(list)
     for a in store.iter_accounts():
@@ -114,17 +135,42 @@ def compute_behavioral_signals(store: Store) -> list[PairSignal]:
             by_domain[a["domain"]].append(a["address"])
     for domain, addrs in by_domain.items():
         addrs = sorted(set(addrs))
+        # A domain shared by hundreds of accounts is a hosting/parking domain, not
+        # a shared-operator signal — and an O(n^2) candidate bomb. Skip it.
+        if len(addrs) > max_domain_holders:
+            continue
         for i in range(len(addrs)):
             for j in range(i + 1, len(addrs)):
                 a, b = _pair(addrs[i], addrs[j])
                 out.append(PairSignal(a, b, "domain_reuse", 0.5, {"domain": domain}))
+    return out
 
-    hist = _hour_histograms(store, private)
-    accts = sorted(k for k, v in hist.items() if sum(v) >= 20)
-    for i in range(len(accts)):
-        for j in range(i + 1, len(accts)):
-            a, b = accts[i], accts[j]
-            cos = _cosine(hist[a], hist[b])
-            if cos >= 0.9:
-                out.append(PairSignal(a, b, "active_hours", 0.2, {"cosine": round(cos, 3)}))
+def compute_active_hours_signals(store: Store,
+                                 candidate_pairs) -> list[PairSignal]:
+    """Activity-hour cosine similarity, computed ONLY for already-nominated pairs.
+
+    active_hours (weight 0.2) can never form a cluster link on its own — it only
+    corroborates pairs another signal already surfaced. Restricting it to candidate
+    pairs is what keeps clustering from materialising the ~n^2 coincidental-schedule
+    matches that blew the process to 42 GB at 17k accounts.
+    """
+    cands = {_pair(a, b) for (a, b) in candidate_pairs}
+    if not cands:
+        return []
+    private = _private_accounts(store)
+    needed = {x for pair in cands for x in pair} & private
+    if not needed:
+        return []
+    hist = _hour_histograms(store, needed)
+
+    out: list[PairSignal] = []
+    for a, b in cands:
+        ha, hb = hist.get(a), hist.get(b)
+        if ha is None or hb is None:
+            continue
+        if sum(ha) < 20 or sum(hb) < 20:
+            continue
+        cos = _cosine(ha, hb)
+        if cos >= 0.9:
+            out.append(PairSignal(a, b, "active_hours", 0.2, {"cosine": round(cos, 3)}))
     return out

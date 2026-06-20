@@ -4,6 +4,7 @@ from xrpl_audit.signals import (
     compute_funding_signals,
     compute_counterparty_nft_signals,
     compute_behavioral_signals,
+    compute_active_hours_signals,
 )
 
 def _seed_edges(store, edges):
@@ -82,27 +83,63 @@ def _insert_txs(store, sender, count, close_time, start_idx=0):
         store.insert_transaction(tx)
 
 
-def test_active_hours_signal(store):
+def test_active_hours_enriches_candidate_pairs(store):
     # Two private accounts with identical hour distributions (cosine = 1.0).
     # close_time=3600 → hour = (3600 + 946684800) // 3600 % 24 = 1; single-bucket spike.
-    # Must be non-zero: the storage filter skips rows where close_time is falsy.
+    # active_hours only fires for pairs already nominated by a stronger signal.
     _private(store, "rAlice", "rBob")
     _insert_txs(store, "rAlice", 20, close_time=3600, start_idx=0)
     _insert_txs(store, "rBob",   20, close_time=3600, start_idx=20)
 
-    sigs = compute_behavioral_signals(store)
+    sigs = compute_active_hours_signals(store, candidate_pairs={("rAlice", "rBob")})
     active = [s for s in sigs if s.signal_type == "active_hours"]
     assert any({s.a, s.b} == {"rAlice", "rBob"} for s in active), (
-        "expected active_hours PairSignal for rAlice/rBob"
+        "expected active_hours PairSignal for the candidate pair rAlice/rBob"
     )
 
-    # Negative case: third account with < 20 txs must not appear in any active_hours pair
-    _private(store, "rCharlie")
-    _insert_txs(store, "rCharlie", 5, close_time=3600, start_idx=40)
+def test_active_hours_skips_non_candidate_pairs(store):
+    # Same identical-schedule accounts, but no candidate nominates them → no signal.
+    # This is the fix for the O(n^2) blow-up: a coincidental schedule match between
+    # otherwise-unconnected accounts is never materialized.
+    _private(store, "rAlice", "rBob")
+    _insert_txs(store, "rAlice", 20, close_time=3600, start_idx=0)
+    _insert_txs(store, "rBob",   20, close_time=3600, start_idx=20)
 
-    sigs2 = compute_behavioral_signals(store)
-    charlie_pairs = [
-        s for s in sigs2
-        if s.signal_type == "active_hours" and "rCharlie" in {s.a, s.b}
-    ]
-    assert not charlie_pairs, "rCharlie has < 20 txs and must not appear in active_hours pairs"
+    sigs = compute_active_hours_signals(store, candidate_pairs=set())
+    assert not [s for s in sigs if s.signal_type == "active_hours"]
+
+def test_active_hours_requires_min_activity(store):
+    # A candidate pair where one side has < 20 txs must not produce an active_hours signal.
+    _private(store, "rAlice", "rBob")
+    _insert_txs(store, "rAlice", 20, close_time=3600, start_idx=0)
+    _insert_txs(store, "rBob",    5, close_time=3600, start_idx=20)
+
+    sigs = compute_active_hours_signals(store, candidate_pairs={("rAlice", "rBob")})
+    assert not [s for s in sigs if s.signal_type == "active_hours"]
+
+def test_jaccard_skips_hub_counterparties(store):
+    # 40 accounts all touch the same 3 counterparties. Those counterparties are held
+    # by everyone → non-discriminating hubs. With a holder cap they're skipped, so we
+    # never materialise the 40*39/2 = 780 all-pairs jaccard signals.
+    accts = [f"rD{i:02d}" for i in range(40)]
+    for c in ["rS1", "rS2", "rS3"]:
+        store.upsert_account(c, is_service_leaf=0)
+    for a in accts:
+        _private(store, a)
+        for c in ["rS1", "rS2", "rS3"]:
+            store.record_counterparty(a, c)
+    sigs = compute_counterparty_nft_signals(store, min_jaccard=0.3, min_shared=3,
+                                            max_holders=20)
+    assert not [s for s in sigs if s.signal_type == "counterparty_jaccard"]
+
+def test_jaccard_still_links_real_pairs_via_inverted_index(store):
+    # Two accounts sharing 3 low-fanout counterparties are still linked.
+    _private(store, "rA", "rB")
+    for cp in ["rX", "rY", "rZ"]:
+        store.upsert_account(cp, is_service_leaf=0)
+        store.record_counterparty("rA", cp)
+        store.record_counterparty("rB", cp)
+    sigs = compute_counterparty_nft_signals(store, min_jaccard=0.3, min_shared=3,
+                                            max_holders=20)
+    assert any(s.signal_type == "counterparty_jaccard" and {s.a, s.b} == {"rA", "rB"}
+               for s in sigs)

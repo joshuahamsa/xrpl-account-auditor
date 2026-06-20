@@ -3,7 +3,8 @@ from collections import defaultdict
 from .models import PairSignal, Cluster
 from .storage import Store
 from .signals import (compute_key_signer_signals, compute_funding_signals,
-                      compute_counterparty_nft_signals, compute_behavioral_signals)
+                      compute_counterparty_nft_signals, compute_behavioral_signals,
+                      compute_active_hours_signals)
 
 DEFAULT_WEIGHTS = {
     "regular_key": 1.0, "shared_regular_key": 1.0, "signer_list": 1.0,
@@ -64,10 +65,15 @@ def build_clusters(pair_scores, link_threshold: float = 0.6) -> list[Cluster]:
     return clusters
 
 def run_clustering(store: Store, weights=None) -> list[Cluster]:
-    signals = (compute_key_signer_signals(store)
-               + compute_funding_signals(store)
-               + compute_counterparty_nft_signals(store)
-               + compute_behavioral_signals(store))
+    # Sparse, structurally-bounded signals first; the pairs they surface become the
+    # only candidates active_hours is allowed to enrich. This keeps the working set
+    # proportional to real connections rather than n^2 over every account.
+    base = (compute_key_signer_signals(store)
+            + compute_funding_signals(store)
+            + compute_counterparty_nft_signals(store)
+            + compute_behavioral_signals(store))
+    candidate_pairs = {(s.a, s.b) for s in base}
+    signals = base + compute_active_hours_signals(store, candidate_pairs)
     store.conn.execute("DELETE FROM signals")
     store.conn.execute("DELETE FROM clusters")
     for s in signals:
